@@ -1,0 +1,6 @@
+#define SECRET_SSID "Linksys00441"
+#define SECRET_PASS "ikd0fyaguz"
+#define MQTT_SERVER "192.168.1.127"
+#define MQTT_PASS "admin"
+#define MQTT_USER "admin"
+#define MQTT_TOPIC "123/temperatur/stue/1"
