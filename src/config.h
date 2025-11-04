@@ -3,4 +3,5 @@
 #define MQTT_SERVER "192.168.1.127"
 #define MQTT_PASS "admin"
 #define MQTT_USER "admin"
-#define MQTT_TOPIC "123/temperatur/stue/1"
+#define MQTT_TOPIC "1/temperatur/stue/1"
+#define FAN_TOPIC "1/fan/stue/1"

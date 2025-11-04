@@ -22,6 +22,12 @@ rgb_lcd lcd;
 
 DHT sensor(7, DHTTYPE);
 const int tempCalibration = -2; // Temperature calibration value
+float prevTemp = 0.0;
+
+// FAN
+bool prevFanOnState = false;
+int prevFanSpeed = -1;
+String prevFanMode = "";
 
 // Settings
 struct Settings
@@ -30,8 +36,9 @@ struct Settings
   float justRight = 20;
   float tooHigh = 25;
   bool fanOn = false;
-  bool permFanOff = true;
-  String settingTopic = "123/temperatur/stue/1/settings";
+  String fanMode = "off";
+  String tempSettingTopic = "1/temperatur/stue/1/settings";
+  String fanSettingTopic = "1/fan/stue/1/settings";
 } deviceSettings;
 
 // Create SSL espClient instance
@@ -64,8 +71,8 @@ void setup()
   client.setServer(MQTT_SERVER, 1883);
   client.setCallback(mqttCallback);
   connectToMqtt();
-  client.subscribe(deviceSettings.settingTopic.c_str());
-
+  client.subscribe(deviceSettings.tempSettingTopic.c_str());
+  client.subscribe(deviceSettings.fanSettingTopic.c_str());
 
   delay(1000);
   lcd.clear(); // Clear the LCD screen
@@ -79,7 +86,8 @@ void loop()
   timeClient.update();                            // Update the time
   long current_epoch = timeClient.getEpochTime(); // Get the current epoch time
   float temp_hum_val[2] = {0};
-  if(!client.connected()){
+  if (!client.connected())
+  {
     connectToMqtt();
   }
   client.loop();
@@ -87,10 +95,10 @@ void loop()
   if (!sensor.readTempAndHumidity(temp_hum_val))
   {
     float temperature = temp_hum_val[1] + tempCalibration; // Read temperature
-    float humidity = temp_hum_val[0];    // Read humidity
+    float humidity = temp_hum_val[0];                      // Read humidity
 
     updateLCDColor(temperature, deviceSettings.tooLow, deviceSettings.justRight, deviceSettings.tooHigh);
-    lcd.clear();                  // Clear the LCD screen
+    lcd.clear(); // Clear the LCD screen
     // Display values on LCD
     lcd.setCursor(0, 0);
     lcd.print("Temp: ");
@@ -106,43 +114,83 @@ void loop()
     jsonDoc["temperatur"] = temperature;
     jsonDoc["humidity"] = humidity;
     jsonDoc["fanOn"] = deviceSettings.fanOn;
-    String jsonString;
-    serializeJson(jsonDoc, jsonString);
-    client.publish(MQTT_TOPIC, jsonString.c_str());
+
+    if (fabs(temperature - prevTemp) >= 0.2)
+    {
+      String jsonString;
+      serializeJson(jsonDoc, jsonString);
+      client.publish(MQTT_TOPIC, jsonString.c_str());
+
+      prevTemp = temperature;
+    }
 
     // Turn on fan if temperature is too high
     unsigned long timeNow = millis();
-    if (temperature <= deviceSettings.justRight)
+
+    if (deviceSettings.fanMode == "on")
     {
-      if(timeNow - lastTimeFanSpun > delayBetweenOnOff){
-        fanSpeed = 0; // Fan off
-        deviceSettings.fanOn = false;
+      fanSpeed = 255;
+      deviceSettings.fanOn = true;
+    }
+    else if (deviceSettings.fanMode == "off")
+    {
+      fanSpeed = 0;
+      deviceSettings.fanOn = false;
+    }
+    else if (deviceSettings.fanMode == "auto")
+    {
+      if (temperature <= deviceSettings.justRight)
+      {
+        if (timeNow - lastTimeFanSpun > delayBetweenOnOff)
+        {
+          fanSpeed = 0; // Fan off
+          deviceSettings.fanOn = false;
+        }
+      }
+      else if (temperature >= deviceSettings.tooHigh)
+      {
+        fanSpeed = 255; // Fan at full speed
+        lastTimeFanSpun = timeNow;
+        deviceSettings.fanOn = true;
+      }
+      else
+      {
+        // Map temperature range to PWM (0–255)
+        fanSpeed = map(temperature, deviceSettings.tooLow, deviceSettings.tooHigh, 0, 255);
+        lastTimeFanSpun = timeNow;
+        deviceSettings.fanOn = true;
       }
     }
-    else if (temperature >= deviceSettings.tooHigh)
+    analogWrite(FAN_PIN, fanSpeed);
+
+    // --- Publish fan state changes to MQTT ---
+    if (deviceSettings.fanOn != prevFanOnState ||
+        fanSpeed != prevFanSpeed ||
+        deviceSettings.fanMode != prevFanMode)
     {
-      fanSpeed = 255; // Fan at full speed
-      lastTimeFanSpun = timeNow;
-      deviceSettings.fanOn = true;
-    }
-    else
-    {
-      // Map the temperature range between tooLow and tooHigh to the PWM range (0-255)
-      fanSpeed = map(temperature, deviceSettings.tooLow, deviceSettings.tooHigh, 0, 255);
-      lastTimeFanSpun = timeNow;
-      deviceSettings.fanOn = true;
-    }
-    // Set the fan speed
-    if(deviceSettings.permFanOff){
-      analogWrite(FAN_PIN, 0);
-    } else if (!deviceSettings.permFanOff){
-      analogWrite(FAN_PIN, fanSpeed);
+
+      JsonDocument fanDoc;
+      fanDoc["fanOn"] = deviceSettings.fanOn;
+      fanDoc["fanSpeed"] = fanSpeed;
+      fanDoc["fanMode"] = deviceSettings.fanMode;
+
+      String fanJson;
+      serializeJson(fanDoc, fanJson);
+
+      client.publish(FAN_TOPIC, fanJson.c_str());
+      Serial.println("Published fan state: " + fanJson);
+
+      // Update previous values
+      prevFanOnState = deviceSettings.fanOn;
+      prevFanSpeed = fanSpeed;
+      prevFanMode = deviceSettings.fanMode;
     }
   }
   else
   {
     Serial.println("Error reading temperature and humidity.");
   }
+  delay(100);
 }
 
 void updateLCDColor(float temperature, float lowTemp, float normalTemp, float highTemp)
@@ -185,8 +233,8 @@ void updateLCDColor(float temperature, float lowTemp, float normalTemp, float hi
   lcd.setRGB(red, green, blue);
 }
 
-
-void setup_wifi(){
+void setup_wifi()
+{
   Serial.println("Connecting to WiFi...");
   WiFi.begin(SECRET_SSID, SECRET_PASS);
   while (WiFi.status() != WL_CONNECTED)
@@ -197,14 +245,17 @@ void setup_wifi(){
   Serial.println("\nWiFi connected.");
 }
 
-void connectToMqtt(){
+void connectToMqtt()
+{
   while (!client.connected())
   {
     Serial.println("Connecting to MQTT...");
-    if (client.connect(MQTT_TOPIC, MQTT_USER, MQTT_PASS)) {
+    if (client.connect(MQTT_TOPIC, MQTT_USER, MQTT_PASS))
+    {
       Serial.println("MQTT connected.");
     }
-    else {
+    else
+    {
       Serial.print("MQTT connection failed, rc=");
       Serial.print(client.state());
       delay(5000);
@@ -212,7 +263,8 @@ void connectToMqtt(){
   }
 }
 
-void mqttCallback(char *topic, byte *payload, unsigned int length){
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
   String message;
   for (unsigned int i = 0; i < length; i++)
   {
@@ -221,27 +273,33 @@ void mqttCallback(char *topic, byte *payload, unsigned int length){
   Serial.println("Received MQTT message on topic: " + String(topic));
   Serial.println("Message: " + message);
 
-  if(String(topic) == deviceSettings.settingTopic) {
-    JsonDocument jsonDoc;
-    DeserializationError error = deserializeJson(jsonDoc, message);
+  JsonDocument jsonDoc;
+  DeserializationError error = deserializeJson(jsonDoc, message);
 
-    if (error)
+  if (error)
+  {
+    Serial.println("Failed to parse JSON");
+    Serial.println(error.c_str());
+    return;
+  }
+  if (String(topic) == deviceSettings.tempSettingTopic)
+  {
+
+    if (jsonDoc.containsKey("maxTemp") && jsonDoc.containsKey("normalTemp") && jsonDoc.containsKey("lowTemp"))
     {
-      Serial.println("Failed to parse JSON");
-      Serial.println(error.c_str());
-      return;
-    }  
-
-    if(jsonDoc["maxTemp"] && jsonDoc["normalTemp"] && jsonDoc["lowTemp"]){
       deviceSettings.tooHigh = jsonDoc["maxTemp"];
       deviceSettings.justRight = jsonDoc["normalTemp"];
       deviceSettings.tooLow = jsonDoc["lowTemp"];
     }
-    if(jsonDoc.containsKey("permFanOff")){
-      deviceSettings.permFanOff = jsonDoc["permFanOff"];
-    }
 
-
+    updateLCDColor(prevTemp, deviceSettings.tooLow, deviceSettings.justRight, deviceSettings.tooHigh);
   }
+  else if (String(topic) == deviceSettings.fanSettingTopic)
+  {
 
+    if (jsonDoc.containsKey("fanMode"))
+    {
+      deviceSettings.fanMode = jsonDoc["fanMode"].as<String>();
+    }
+  }
 }
