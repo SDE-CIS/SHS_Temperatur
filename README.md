@@ -55,9 +55,7 @@ Enheden sender og modtager data i JSON-format:
 {
   "temperature": 21.5,
   "humidity": 47,
-  "fan": "on",
-  "mode": "auto",
-  "timestamp": "2025-11-12T14:23:00Z"
+  "fanOn": "on",
 }
 ```
 
@@ -131,9 +129,3 @@ Når systemet er aktivt, fungerer det i tæt integration med Safehouse Solutions
 ```bash
 pio run --target upload
 ```
-
-## Fremtidige udvidelser
-* Understøttelse af DHT22 for højere præcision
-* MQTT over TLS (port 8883)
-* Lokal datalogning på SD-kort
-* Automatisk kalibrering baseret på historiske værdier
