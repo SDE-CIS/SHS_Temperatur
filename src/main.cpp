@@ -45,7 +45,6 @@ struct Settings
 WiFiClient espClient;
 PubSubClient client(espClient);
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
 
 // Fan Delays
 unsigned long lastTimeFanSpun = millis();
@@ -71,20 +70,13 @@ void setup()
   client.setServer(MQTT_SERVER, 1883);
   client.setCallback(mqttCallback);
   connectToMqtt();
-  client.subscribe(deviceSettings.tempSettingTopic.c_str());
-  client.subscribe(deviceSettings.fanSettingTopic.c_str());
 
   delay(1000);
   lcd.clear(); // Clear the LCD screen
-
-  // Set the time
-  timeClient.begin();
 }
 
 void loop()
 {
-  timeClient.update();                            // Update the time
-  long current_epoch = timeClient.getEpochTime(); // Get the current epoch time
   float temp_hum_val[2] = {0};
   if (!client.connected())
   {
@@ -97,18 +89,21 @@ void loop()
     float temperature = temp_hum_val[1] + tempCalibration; // Read temperature
     float humidity = temp_hum_val[0];                      // Read humidity
 
-    updateLCDColor(temperature, deviceSettings.tooLow, deviceSettings.justRight, deviceSettings.tooHigh);
-    lcd.clear(); // Clear the LCD screen
-    // Display values on LCD
-    lcd.setCursor(0, 0);
-    lcd.print("Temp: ");
-    lcd.print(temperature);
-    lcd.print(" C");
+    if (fabs(temperature - prevTemp) >= 0.2)
+    {
+      updateLCDColor(temperature, deviceSettings.tooLow, deviceSettings.justRight, deviceSettings.tooHigh);
+      lcd.clear(); // Clear the LCD screen
+      // Display values on LCD
+      lcd.setCursor(0, 0);
+      lcd.print("Temp: ");
+      lcd.print(temperature);
+      lcd.print(" C");
 
-    lcd.setCursor(0, 1);
-    lcd.print("Hum: ");
-    lcd.print(humidity);
-    lcd.print(" %");
+      lcd.setCursor(0, 1);
+      lcd.print("Hum: ");
+      lcd.print(humidity);
+      lcd.print(" %");
+    }
 
     JsonDocument jsonDoc;
     jsonDoc["temperatur"] = temperature;
@@ -250,9 +245,11 @@ void connectToMqtt()
   while (!client.connected())
   {
     Serial.println("Connecting to MQTT...");
-    if (client.connect(MQTT_TOPIC, MQTT_USER, MQTT_PASS))
+    if (client.connect("TemperatureDevice1", MQTT_USER, MQTT_PASS))
     {
       Serial.println("MQTT connected.");
+      client.subscribe(deviceSettings.tempSettingTopic.c_str());
+      client.subscribe(deviceSettings.fanSettingTopic.c_str());
     }
     else
     {
